@@ -312,6 +312,13 @@ impl Buf {
         self.offset[0] += l as f64;
         self.offset[1] += t as f64;
     }
+    /// Grow by `px` transparent pixels on the left and right and `py` above and below, each
+    /// clamped like [`Buf::pad`] so neither side passes the largest supported image.
+    pub fn pad_xy(&mut self, px: u32, py: u32) {
+        let side = |len: u32, p: u32| p.min(effectcraft_raster::MAX_PADDED_SIDE.saturating_sub(len) / 2);
+        let (px, py) = (side(self.img.width, px), side(self.img.height, py));
+        self.pad_sides([px, py, px, py]);
+    }
     /// Grow by `left` and `top` transparent pixels on those sides only.
     pub fn grow_left_top(&mut self, left: u32, top: u32) {
         self.pad_sides([left, top, 0, 0]);
