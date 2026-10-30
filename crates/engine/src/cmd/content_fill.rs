@@ -183,19 +183,60 @@ const FILL_BYTES_PER_PIXEL: u64 = 128;
 pub const DEFAULT_FILL_MEMORY: u64 = 2 << 30;
 
 /// How many frames one fill window holds at most: as many as `memory` bytes (0: the default)
-/// allow for `width` × `height` frames, and never fewer than two. Filling a whole range at once
-/// held every frame several times over: ten seconds of 1080p needed about 70 GB, and the app was
-/// killed for running out of memory.
-pub fn fill_window(width: u32, height: u32, memory: u64) -> usize {
+/// allow for `width` × `height` frames. `None` when not even two frames fit (a window needs a
+/// frame to carry the fill on from): filling a whole range at once held every frame several
+/// times over, ten seconds of 1080p needed about 70 GB, and the app was killed for running out
+/// of memory.
+pub fn fill_window(width: u32, height: u32, memory: u64) -> Option<usize> {
     let budget = if memory > 0 { memory } else { DEFAULT_FILL_MEMORY };
     let per_frame = (u64::from(width) * u64::from(height)).saturating_mul(FILL_BYTES_PER_PIXEL).max(1);
-    usize::try_from(budget / per_frame).unwrap_or(usize::MAX).max(2)
+    let frames = usize::try_from(budget / per_frame).unwrap_or(usize::MAX);
+    (frames >= 2).then_some(frames)
+}
+
+/// The error for a fill whose frames are too large for even a two-frame window.
+fn window_error(w: u32, h: u32) -> String {
+    format!("Content-Aware Fill can't hold two {w}×{h} frames in the memory it may use: close other applications or fill a smaller layer")
 }
 
 /// The working memory a fill started in this session may use: half of what the system has
-/// available when that is known, at least 1 GiB.
+/// available when that is known (0, the default, when it isn't).
 fn fill_memory(s: &Session) -> u64 {
-    s.sys_memory.filter(|m| m.available > 0).map_or(0, |m| (m.available / 2).max(1 << 30))
+    s.sys_memory.filter(|m| m.available > 1).map_or(0, |m| m.available / 2)
+}
+
+/// The windows a fill of `count` frames runs in, `window` frames each, in order: first the one
+/// holding the reference frame `anchor`, then those after it, then those before it. Neighbouring
+/// windows share a frame, which the window filled first carries into the next (`backward`: the
+/// shared frame is the window's last, carried back from the window after it).
+fn fill_windows(count: usize, window: usize, anchor: usize) -> Vec<Window> {
+    let window = window.max(2);
+    let end = anchor.saturating_add(window / 2 + 1).min(count).max(window.min(count));
+    let start = end.saturating_sub(window);
+    let mut out = vec![Window { start, end, backward: false }];
+    let mut s = end;
+    while s < count {
+        let a = s - 1;
+        let b = a.saturating_add(window).min(count);
+        out.push(Window { start: a, end: b, backward: false });
+        s = b;
+    }
+    let mut e = start;
+    while e > 0 {
+        let b = e + 1;
+        let a = b.saturating_sub(window);
+        out.push(Window { start: a, end: b, backward: true });
+        e = a;
+    }
+    out
+}
+
+/// One window of a fill: frames `start..end`; see [`fill_windows`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Window {
+    start: usize,
+    end: usize,
+    backward: bool,
 }
 
 /// The fill holds every frame as float RGBA (16 bytes a pixel), its hole mask (1) and the filled
@@ -254,71 +295,96 @@ pub(crate) async fn run_plan(
         }
     }
     let opts = FillOpts { method: FillMethod::from_name(&plan.method).unwrap_or_default(), lighting: plan.lighting, ..Default::default() };
-    // A range too long to hold at once is filled in windows. Each window starts with the last
-    // frame the previous one filled, as a reference frame, so the fill carries on across them.
-    let window = fill_window(w, h, plan.memory);
+    // A range too long to hold at once is filled in windows, outward from the reference frame.
+    // Each window starts (or, going back, ends) with a frame its neighbour filled, as a
+    // reference frame, so the fill carries on across them both ways.
+    let window = fill_window(w, h, plan.memory).ok_or_else(|| window_error(w, h))?;
+    let windows = fill_windows(count, window, reference.as_ref().map_or(0, |(k, _)| *k));
+    let last = windows.len().saturating_sub(1);
     let dir = &plan.dir;
-    let mut paths = vec![];
-    let mut carried: Option<Image> = None;
+    let mut paths: Vec<Option<String>> = vec![None; count];
+    let (mut forward, mut back): (Option<Image>, Option<Image>) = (None, None);
     let mut any_hole = false;
-    let mut start = 0usize;
-    while start < count {
-        let end = start.saturating_add(window).min(count);
+    let (mut read, mut filled, mut written) = (0u64, 0u64, 0u64);
+    for (wi, win) in windows.iter().enumerate() {
+        let Window { start, end, backward } = *win;
         let len = end - start;
+        // The frame shared with the window filled before, and where it sits in this one.
+        let carried = if wi == 0 {
+            None
+        } else if backward {
+            back.take().map(|img| (len - 1, img))
+        } else {
+            forward.take().map(|img| (0, img))
+        };
         let mut frames = Vec::with_capacity(len);
         let mut holes = Vec::with_capacity(len);
         let mut references = vec![];
-        if let Some(prev) = carried.take() {
-            holes.push(vec![false; w as usize * h as usize]);
-            frames.push(prev.clone());
-            references.push((0, prev));
-        }
-        for k in start + frames.len()..end {
-            let Some(t) = times.get(k) else { break };
+        for i in 0..len {
+            if let Some((ci, img)) = &carried
+                && *ci == i
+            {
+                holes.push(vec![false; w as usize * h as usize]);
+                frames.push(img.clone());
+                references.push((i, img.clone()));
+                continue;
+            }
+            let Some(t) = times.get(start + i) else { break };
             let (img, hole) = crate::offload::in_passes(accel, |a| masked_frame(&r.with_accel(a), &ctx0.at(*t), layer, w, h)).await;
             holes.push(dilate(&hole, w as usize, h as usize, plan.expand));
             frames.push(img);
-            if !progress(k as u64 + 1, n * 3) {
+            read += 1;
+            if !progress(read.min(n), n * 3) {
                 return Err(crate::render_queue::CANCELLED.into());
             }
         }
         any_hole |= holes.iter().any(|h| h.iter().any(|b| *b));
         // (checked before anything is written when the range fits in one window)
-        if end == count && !any_hole {
+        if wi == last && !any_hole {
+            for p in paths.iter().flatten() {
+                let _ = services.remove_file(p);
+            }
             return Err("the layer has no transparent area to fill: draw a mask (Subtract) around what to remove".into());
         }
         if let Some((k, img)) = &reference
             && (start..end).contains(k)
-            && !(start > 0 && *k == start)
+            && carried.as_ref().is_none_or(|(ci, _)| start + ci != *k)
         {
             references.push((k - start, img.clone()));
         }
         message("Filling");
-        let (s0, l) = (start as u64, len as u64);
+        let (f0, l) = (filled, len as u64);
         let input = FillInput { frames, holes, references };
-        let out = fill_sequence(&input, &opts, &mut |d, t| progress(n + s0 + (d as u64 * l / t.max(1) as u64), n * 3)).ok_or(crate::render_queue::CANCELLED)?;
+        let out = fill_sequence(&input, &opts, &mut |d, t| progress(n + (f0 + d as u64 * l / t.max(1) as u64).min(n), n * 3))
+            .ok_or(crate::render_queue::CANCELLED)?;
+        filled += l;
         drop(input);
         message("Writing the fill layer");
         for (i, img) in out.iter().enumerate() {
-            // A later window's first frame was written by the window before.
-            if start > 0 && i == 0 {
+            // The shared frame was written by the window that filled it.
+            if carried.as_ref().is_some_and(|(ci, _)| *ci == i) {
                 continue;
             }
             let k = start + i;
             let path = std::path::Path::new(dir).join(format!("fill_{k:05}.png")).to_string_lossy().to_string();
             services.store_file(&path, &png(img)?).map_err(|e| format!("{path}: {e}"))?;
-            paths.push(path);
-            if !progress(2 * n + k as u64 + 1, n * 3) {
+            if let Some(slot) = paths.get_mut(k) {
+                *slot = Some(path);
+            }
+            written += 1;
+            if !progress(2 * n + written.min(n), n * 3) {
                 return Err(crate::render_queue::CANCELLED.into());
             }
         }
-        if end >= count {
-            break;
+        // The window holding the reference carries both ways; the others in their direction.
+        if wi == 0 || backward {
+            back = out.first().cloned();
         }
-        carried = out.into_iter().last();
-        start = end - 1;
+        if !backward {
+            forward = out.into_iter().last();
+        }
     }
-    Ok(paths)
+    Ok(paths.into_iter().flatten().collect())
 }
 
 /// Add the fill layer of a finished plan (one undo step).
@@ -365,7 +431,9 @@ pub(crate) fn make_plan(s: &mut Session, p: &Value) -> Result<FillPlan> {
     if times.is_empty() {
         return Err(bad(c, "the range holds no whole frame to fill"));
     }
-    if let Some(e) = crate::sysinfo::memory().and_then(|m| memory_shortfall(times.len(), w, h, m.available)) {
+    // The fill holds one window of frames at a time.
+    let window = fill_window(w, h, fill_memory(s)).ok_or_else(|| bad(c, window_error(w, h)))?;
+    if let Some(e) = crate::sysinfo::memory().and_then(|m| memory_shortfall(times.len().min(window), w, h, m.available)) {
         return Err(bad(c, e));
     }
     let opts = FillOpts {
@@ -527,7 +595,30 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests {
-    use super::memory_shortfall;
+    use super::{Window, fill_windows, memory_shortfall};
+
+    /// Windows run outward from the reference frame, so its fill reaches the frames before it
+    /// too (they used to start at frame 0, and a reference only reached its own window and the
+    /// later ones). Each frame is in a window, and neighbours share one frame.
+    #[test]
+    fn fill_windows_run_outward_from_the_reference() {
+        let w = |start, end, backward| Window { start, end, backward };
+        assert_eq!(fill_windows(12, 3, 0), vec![w(0, 3, false), w(2, 5, false), w(4, 7, false), w(6, 9, false), w(8, 11, false), w(10, 12, false)]);
+        assert_eq!(fill_windows(12, 3, 7), vec![w(6, 9, false), w(8, 11, false), w(10, 12, false), w(4, 7, true), w(2, 5, true), w(0, 3, true)]);
+        assert_eq!(fill_windows(12, 3, 11), vec![w(9, 12, false), w(7, 10, true), w(5, 8, true), w(3, 6, true), w(1, 4, true), w(0, 2, true)]);
+        assert_eq!(fill_windows(5, 30, 2), vec![w(0, 5, false)], "a range that fits is one window");
+        assert_eq!(fill_windows(1, 2, 0), vec![w(0, 1, false)]);
+        for (count, window, anchor) in [(12, 3, 7), (100, 7, 50), (9, 2, 4), (40, 9, 39), (3, usize::MAX, 1)] {
+            let ws = fill_windows(count, window, anchor);
+            assert!(ws[0].start <= anchor && anchor < ws[0].end, "{ws:?}");
+            assert!(ws.iter().all(|x| x.end - x.start <= window.max(2) && x.start < x.end && x.end <= count), "{ws:?}");
+            let mut seen = vec![false; count];
+            for x in &ws {
+                seen[x.start..x.end].iter_mut().for_each(|b| *b = true);
+            }
+            assert!(seen.iter().all(|b| *b), "{count} {window} {anchor}: {ws:?}");
+        }
+    }
 
     /// #1789: 10 s of 1080p30 (300 frames) needs at least 20 GB, which 4 GB free can't hold.
     #[test]

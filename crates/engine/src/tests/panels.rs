@@ -341,9 +341,9 @@ fn content_aware_fill_of_a_long_range_is_filled_in_windows() {
     assert_eq!(plan.times.len(), 12);
     // Room for three frames at a time: windows of frames 0–2, 2–4, … 10–11.
     plan.memory = 3 * 96 * 64 * 128;
-    assert_eq!(fill_window(96, 64, plan.memory), 3);
-    assert_eq!(fill_window(96, 64, 1), 2, "never fewer than two frames");
-    assert!(fill_window(1920, 1080, 0) < 30, "the default memory doesn't hold a second of 1080p at once");
+    assert_eq!(fill_window(96, 64, plan.memory), Some(3));
+    assert_eq!(fill_window(96, 64, 1), None, "not even two frames fit: refused, not over budget");
+    assert!(fill_window(1920, 1080, 0).is_some_and(|w| w < 30), "the default memory doesn't hold a second of 1080p at once");
     let lf = crate::commands::scene_detect::LayerFrames::new(&s, cid, clip);
     let (mut done, mut messages) = (vec![], Vec::<String>::new());
     let files = effectcraft_render::passes::block_on(run_plan(
@@ -393,6 +393,34 @@ fn content_aware_fill_of_a_long_range_is_filled_in_windows() {
     let e = make_plan(&mut s, &json!({"layer": clip.0})).unwrap_err().to_string();
     assert!(e.contains("no whole frame"), "{e}");
     std::fs::remove_dir_all(&out).unwrap();
+}
+
+/// A windowed fill that finds nothing to fill fails without leaving the frames of its earlier
+/// windows behind (the check runs once every frame has been read).
+#[test]
+fn content_aware_fill_without_a_hole_leaves_no_files() {
+    use crate::commands::content_fill::{make_plan, run_plan};
+    let (mut s, cid, clip, _) = setup(96, 64, 0.48, |f| caf_frame(f, false));
+    let out = tmp("caf-nohole");
+    s.execute("contentFill.set", json!({"method": "object", "range": "workArea"})).unwrap();
+    let mut plan = make_plan(&mut s, &json!({"outputDir": out.to_string_lossy()})).unwrap();
+    plan.memory = 3 * 96 * 64 * 128;
+    let lf = crate::commands::scene_detect::LayerFrames::new(&s, cid, clip);
+    let r = effectcraft_render::passes::block_on(run_plan(
+        &plan,
+        &lf.project,
+        lf.footage.as_ref(),
+        lf.expr.as_deref(),
+        &lf.cache,
+        s.services.as_ref(),
+        None,
+        &mut |_, _| true,
+        &mut |_| {},
+    ));
+    assert!(r.as_ref().is_err_and(|e| e.contains("no transparent area")), "{r:?}");
+    let left = std::fs::read_dir(&out).map(|d| d.filter_map(|e| e.ok()).filter(|e| e.path().extension().is_some_and(|x| x == "png")).count()).unwrap_or(0);
+    assert_eq!(left, 0, "the earlier windows' frames are removed");
+    let _ = std::fs::remove_dir_all(&out);
 }
 
 #[test]
