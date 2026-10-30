@@ -197,9 +197,16 @@ fn sort_key(by: u32, p: Px) -> f32 {
 /// Sort the spans of `line` whose key lies within `lo..=hi` (shorter than `max` px when `max` >
 /// 0) by that key, ascending or descending.
 fn sort_line(line: &mut [Px], by: u32, lo: f32, hi: f32, max: usize, reverse: bool) {
+    let key = |p: Px| Some(sort_key(by, p)).filter(|k| p[3] > 0.0 && (lo..=hi).contains(k));
+    sort_spans(line, max, reverse, &key);
+}
+
+/// Sort the spans of `line` whose pixels have a `key` (at most `max` px when `max` > 0) by it.
+/// Linear: every pixel's key is taken at most three times, plus once per span.
+fn sort_spans(line: &mut [Px], max: usize, reverse: bool, key: &dyn Fn(Px) -> Option<f32>) {
     let mut start = 0;
     while start < line.len() {
-        let inside = |p: &Px| p[3] > 0.0 && (lo..=hi).contains(&sort_key(by, *p));
+        let inside = |p: &Px| key(*p).is_some();
         let Some(first) = line.get(start..).and_then(|r| r.iter().position(inside)) else { break };
         let a = start + first;
         // Count no further than the span can reach: counting the whole run for every span made
@@ -208,7 +215,7 @@ fn sort_line(line: &mut [Px], by: u32, lo: f32, hi: f32, max: usize, reverse: bo
         let run = line.get(a..).map_or(0, |r| r.iter().take(reach).take_while(|p| inside(p)).count());
         let b = a.saturating_add(run);
         if let Some(span) = line.get_mut(a..b) {
-            let mut keyed: Vec<(f32, Px)> = span.iter().map(|p| (sort_key(by, *p), *p)).collect();
+            let mut keyed: Vec<(f32, Px)> = span.iter().map(|p| (key(*p).unwrap_or(0.0), *p)).collect();
             keyed.sort_by(|x, y| if reverse { y.0.total_cmp(&x.0) } else { x.0.total_cmp(&y.0) });
             for (o, (_, p)) in span.iter_mut().zip(keyed) {
                 *o = p;
@@ -563,19 +570,32 @@ mod tests {
     }
 
     /// A long run sorted in short spans: each span used to count the whole remaining run, which
-    /// was quadratic (minutes for this row; the test runner's timeout catches a regression).
+    /// was quadratic. The keys taken are counted, so a regression fails here deterministically
+    /// (not by running long).
     #[test]
     fn pixel_sort_short_spans_of_a_long_run_are_linear() {
-        let n = 200_000u32;
+        let n = 20_000u32;
         let mut row = Image::new(n, 1);
         for x in 0..n {
             let v = 0.3 + 0.4 * ((x * 7919) % 1000) as f32 / 1000.0;
             row.set(x, 0, [v, v, v, 1.0]);
         }
-        let out = run("ec.stylize.pixelsort", &[("maxLength", num(1.0)), ("lowerThreshold", num(0.0)), ("upperThreshold", num(100.0))], row.clone());
-        assert_eq!(out.img, row, "one-pixel spans leave the row as it is");
-        let out = run("ec.stylize.pixelsort", &[("maxLength", num(3.0)), ("lowerThreshold", num(0.0)), ("upperThreshold", num(100.0))], row);
-        assert!(out.img.data.chunks(3).all(|s| s.windows(2).all(|w| w[0][0] <= w[1][0])), "three-pixel spans sorted");
+        for max in [1usize, 3, 0] {
+            let calls = std::cell::Cell::new(0usize);
+            let key = |p: Px| {
+                calls.set(calls.get() + 1);
+                Some(p[0])
+            };
+            let mut line = row.data.clone();
+            sort_spans(&mut line, max, false, &key);
+            // The quadratic scan took about n² / (2 max) keys: 2 × 10⁸ for one-pixel spans.
+            assert!(calls.get() <= 4 * n as usize, "max {max}: {} keys for {n} pixels", calls.get());
+            match max {
+                1 => assert_eq!(line, row.data, "one-pixel spans leave the row as it is"),
+                0 => assert!(line.windows(2).all(|w| w[0][0] <= w[1][0]), "one span: the whole row sorted"),
+                _ => assert!(line.chunks(max).all(|s| s.windows(2).all(|w| w[0][0] <= w[1][0])), "{max}-pixel spans sorted"),
+            }
+        }
     }
 
     /// Every method keeps a flat grey's average brightness with two levels.
