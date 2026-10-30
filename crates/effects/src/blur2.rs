@@ -306,7 +306,7 @@ const MAX_LENS_PAD: f64 = 4096.0;
 
 /// How far Camera Lens Blur's iris of radius `r` (px) and Aspect Ratio `aspect` reaches beyond the
 /// layer, sideways and up / down, plus a pixel for rounding; capped at [`MAX_LENS_PAD`].
-fn lens_reach(r: f64, aspect: f64) -> (u32, u32) {
+pub fn lens_reach(r: f64, aspect: f64) -> (u32, u32) {
     let reach = |d: f64| if d.is_finite() { d.clamp(0.0, MAX_LENS_PAD).ceil() as u32 + 1 } else { MAX_LENS_PAD as u32 + 1 };
     (reach(r * aspect.max(1.0)), reach(r))
 }

@@ -53,7 +53,7 @@ fn gaussian(ctx: &EffectCtx, mut b: Buf) -> Buf {
 /// within three standard deviations (`r √(3 it)`), and the growth is capped like other effects'.
 /// Growing by `r × it` asked a 1080p frame at Radius 3000 and 50 Iterations for a buffer
 /// 300 000 px wide, and the failed allocation aborted the app.
-fn box_reach(r: usize, it: usize) -> u32 {
+pub fn box_reach(r: usize, it: usize) -> u32 {
     let spread = (r as f64 * (3.0 * it as f64).sqrt()).ceil();
     (r.saturating_mul(it) as f64).min(spread).min(4096.0) as u32 + 1
 }
@@ -71,8 +71,9 @@ fn box_blur(ctx: &EffectCtx, mut b: Buf) -> Buf {
     let (kx, ky) = dims_xy(ctx.params.e("dimensions"));
     let repeat = ctx.params.b("repeatEdge");
     if !repeat && !ctx.adjustment {
-        let reach = if frac > 0.0 { r + 1 } else { r };
-        b.pad(box_reach(reach, it));
+        // Only the blurred axes grow: Horizontal grows no rows, Vertical no columns.
+        let reach = box_reach(if frac > 0.0 { r + 1 } else { r }, it);
+        b.pad_xy(if kx > 0.0 { reach } else { 0 }, if ky > 0.0 { reach } else { 0 });
     } else if repeat && !ctx.adjustment {
         // The edge it repeats is the layer's, not the painted content's (#1205).
         b.cover(ctx.layer_size);
@@ -1141,6 +1142,12 @@ mod tests {
         let out = run_fx("ec.blur.fastbox", &vals, dot(9), 0.0, EffectEnv::default());
         let total: f32 = out.img.data.iter().map(|p| p[3]).sum();
         assert!((total - 1.0).abs() < 1e-3, "{total}");
+        // Horizontal or Vertical only grows the axis it blurs.
+        for (dim, grows) in [(1, (true, false)), (2, (false, true))] {
+            let vals = [("radius", num(4.0)), ("dimensions", Value::Enum(dim))];
+            let out = run_fx("ec.blur.fastbox", &vals, dot(9), 0.0, EffectEnv::default());
+            assert_eq!((out.img.width > 9, out.img.height > 9), grows, "dimensions {dim}");
+        }
     }
 
     #[test]
