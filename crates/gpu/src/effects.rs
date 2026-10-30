@@ -62,6 +62,9 @@ impl GBuf {
     /// CPU's budget.
     pub fn pad_xy(&mut self, e: &mut Enc, px: u32, py: u32) -> Option<()> {
         let (px, py) = effectcraft_effects::pad_xy_within_budget(self.img.width, self.img.height, px, py);
+        // As `Buf::pad_xy`: neither side past the largest supported image.
+        let side = |len: u32, p: u32| p.min(effectcraft_raster::MAX_PADDED_SIDE.saturating_sub(len) / 2);
+        let (px, py) = (side(self.img.width, px), side(self.img.height, py));
         self.pad_sides(e, [px, py, px, py])
     }
 

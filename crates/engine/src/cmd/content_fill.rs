@@ -254,6 +254,32 @@ fn memory_shortfall(frames: usize, w: u32, h: u32, available: u64) -> Option<Str
     })
 }
 
+/// The frames a fill has written so far: removed when it's dropped before [`Written::keep`]
+/// (the fill failed, was cancelled or was dropped), so a fill leaves all of its sequence or
+/// none of it.
+struct Written<'a> {
+    services: &'a dyn crate::Services,
+    paths: Vec<String>,
+    keep: bool,
+}
+
+impl Written<'_> {
+    /// The fill finished: its frames stay.
+    fn keep(mut self) {
+        self.keep = true;
+    }
+}
+
+impl Drop for Written<'_> {
+    fn drop(&mut self) {
+        if !self.keep {
+            for p in &self.paths {
+                let _ = self.services.remove_file(p);
+            }
+        }
+    }
+}
+
 /// Run a fill: the layer's frames (rendered in passes with a job worker's GPU), the fill, the
 /// PNG sequence written into `plan.dir` (`Services::store_file`). Returns the files.
 #[allow(clippy::too_many_arguments)]
@@ -303,6 +329,7 @@ pub(crate) async fn run_plan(
     let last = windows.len().saturating_sub(1);
     let dir = &plan.dir;
     let mut paths: Vec<Option<String>> = vec![None; count];
+    let mut files = Written { services, paths: vec![], keep: false };
     let (mut forward, mut back): (Option<Image>, Option<Image>) = (None, None);
     let mut any_hole = false;
     let (mut read, mut filled, mut written) = (0u64, 0u64, 0u64);
@@ -341,9 +368,6 @@ pub(crate) async fn run_plan(
         any_hole |= holes.iter().any(|h| h.iter().any(|b| *b));
         // (checked before anything is written when the range fits in one window)
         if wi == last && !any_hole {
-            for p in paths.iter().flatten() {
-                let _ = services.remove_file(p);
-            }
             return Err("the layer has no transparent area to fill: draw a mask (Subtract) around what to remove".into());
         }
         if let Some((k, img)) = &reference
@@ -368,6 +392,7 @@ pub(crate) async fn run_plan(
             let k = start + i;
             let path = std::path::Path::new(dir).join(format!("fill_{k:05}.png")).to_string_lossy().to_string();
             services.store_file(&path, &png(img)?).map_err(|e| format!("{path}: {e}"))?;
+            files.paths.push(path.clone());
             if let Some(slot) = paths.get_mut(k) {
                 *slot = Some(path);
             }
@@ -384,6 +409,7 @@ pub(crate) async fn run_plan(
             forward = out.into_iter().last();
         }
     }
+    files.keep();
     Ok(paths.into_iter().flatten().collect())
 }
 

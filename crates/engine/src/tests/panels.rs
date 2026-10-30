@@ -423,6 +423,37 @@ fn content_aware_fill_without_a_hole_leaves_no_files() {
     let _ = std::fs::remove_dir_all(&out);
 }
 
+/// A fill stopped partway (here, cancelled while writing its fourth window) removes the frames
+/// it wrote, as does any other failure: a fill leaves its whole sequence or nothing.
+#[test]
+fn a_cancelled_fill_leaves_no_files() {
+    use crate::commands::content_fill::{make_plan, run_plan};
+    let (mut s, cid, clip, _) = setup(96, 64, 0.48, |f| caf_frame(f, true));
+    s.execute("layer.addMask", json!({"rect": [36.0, 22.0, 20.0, 18.0], "mode": "subtract"})).unwrap();
+    let out = tmp("caf-cancel");
+    s.execute("contentFill.set", json!({"method": "object", "range": "workArea", "alphaExpansion": 1})).unwrap();
+    let mut plan = make_plan(&mut s, &json!({"outputDir": out.to_string_lossy()})).unwrap();
+    plan.memory = 3 * 96 * 64 * 128;
+    let lf = crate::commands::scene_detect::LayerFrames::new(&s, cid, clip);
+    let n = plan.times.len() as u64;
+    let r = effectcraft_render::passes::block_on(run_plan(
+        &plan,
+        &lf.project,
+        lf.footage.as_ref(),
+        lf.expr.as_deref(),
+        &lf.cache,
+        s.services.as_ref(),
+        None,
+        // Writing reports 2n + frames written: stop after the sixth frame is on disk.
+        &mut |d, _| d < 2 * n + 6,
+        &mut |_| {},
+    ));
+    assert!(r.is_err(), "{r:?}");
+    let left = std::fs::read_dir(&out).map(|d| d.filter_map(|e| e.ok()).filter(|e| e.path().extension().is_some_and(|x| x == "png")).count()).unwrap_or(0);
+    assert_eq!(left, 0, "the frames written before the cancel are removed");
+    let _ = std::fs::remove_dir_all(&out);
+}
+
 #[test]
 fn content_aware_fill_runs_in_the_background() {
     let (mut s, _, _, _) = setup(48, 32, 0.2, |f| {
