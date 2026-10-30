@@ -3,11 +3,11 @@
 <!-- Generated from the effect registry (crates/effects/src/catalog.rs); do not edit by hand.
      Regenerate: UPDATE_DOCS=1 cargo test -p effectcraft-effects --lib effects_doc_is_current -->
 
-EffectCraft ships 312 effects with 3012 parameters in total, grouped into the same categories as the Effects & Presets panel. Every effect is our own implementation, written from public behaviour descriptions and standard image-processing literature. Parameter names, order, popup options, units, defaults and ranges follow the reference application so that projects, expressions and muscle memory carry over.
+EffectCraft ships 316 effects with 3046 parameters in total, grouped into the same categories as the Effects & Presets panel. Every effect is our own implementation, written from public behaviour descriptions and standard image-processing literature. Parameter names, order, popup options, units, defaults and ranges follow the reference application so that projects, expressions and muscle memory carry over.
 
 - **GPU**: 280 effects also run on the GPU compositor with identical results.
-- **32**: 312 effects process 32-bit float (HDR, overbright) pixels without clamping.
-- **Status**: 312 implemented in full, 0 partial (what is missing is listed).
+- **32**: 316 effects process 32-bit float (HDR, overbright) pixels without clamping.
+- **Status**: 316 implemented in full, 0 partial (what is missing is listed).
 
 Effects are addressed by id (`ec.<category>.<name>`) or display name in commands, scripts and the control channel, and every parameter by its id (`effects/#1/blurriness`).
 
@@ -209,6 +209,7 @@ Effects are addressed by id (`ec.<category>.<name>`) or display name in commands
 | Gradient Ramp | `ec.generate.gradientramp` | 7 | GPU | 32 | Implemented |
 | Grid | `ec.generate.grid` | 12 | GPU | 32 | Implemented |
 | Lens Flare | `ec.generate.lensflare` | 4 | GPU | 32 | Implemented |
+| Light Leak | `ec.generate.lightleak` | 8 |  | 32 | Implemented |
 | Paint Bucket | `ec.generate.paintbucket` | 11 | GPU | 32 | Implemented |
 | Radio Waves | `ec.generate.radiowaves` | 31 | GPU | 32 | Implemented |
 | Scribble | `ec.generate.scribble` | 25 | GPU | 32 | Implemented |
@@ -342,6 +343,7 @@ Effects are addressed by id (`ec.<category>.<name>`) or display name in commands
 
 | Effect | Id | Params | GPU | 32 | Status |
 |---|---|---:|:-:|:-:|---|
+| ASCII Art | `ec.stylize.ascii` | 8 |  | 32 | Implemented |
 | Brush Strokes | `ec.stylize.brushstrokes` | 7 | GPU | 32 | Implemented |
 | CC Block Load | `ec.stylize.ccblockload` | 5 | GPU | 32 | Implemented |
 | CC Burn Film | `ec.stylize.ccburnfilm` | 3 | GPU | 32 | Implemented |
@@ -354,6 +356,7 @@ Effects are addressed by id (`ec.<category>.<name>`) or display name in commands
 | CC Threshold | `ec.stylize.ccthreshold` | 4 | GPU | 32 | Implemented |
 | CC Threshold RGB | `ec.stylize.ccthresholdrgb` | 7 | GPU | 32 | Implemented |
 | CC Vignette | `ec.stylize.ccvignette` | 4 | GPU | 32 | Implemented |
+| CRT | `ec.stylize.crt` | 8 |  | 32 | Implemented |
 | Cartoon | `ec.stylize.cartoon` | 12 | GPU | 32 | Implemented |
 | Color Emboss | `ec.stylize.coloremboss` | 4 | GPU | 32 | Implemented |
 | Dither | `ec.stylize.dither` | 5 |  | 32 | Implemented |
@@ -371,6 +374,7 @@ Effects are addressed by id (`ec.<category>.<name>`) or display name in commands
 | Strobe Light | `ec.stylize.strobe` | 7 | GPU | 32 | Implemented |
 | Texturize | `ec.stylize.texturize` | 4 | GPU | 32 | Implemented |
 | Threshold | `ec.stylize.threshold` | 1 | GPU | 32 | Implemented |
+| VHS | `ec.stylize.vhs` | 10 |  | 32 | Implemented |
 
 ## Text
 

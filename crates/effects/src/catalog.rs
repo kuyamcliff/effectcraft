@@ -48,6 +48,22 @@ pub fn param_shown(effect: &str, param: &str, value: &dyn Fn(&str) -> Option<eff
             }
             None => true,
         },
+        // EffectCraft's own effects: a control shows when its popup choice uses it.
+        "ec.stylize.rgbsplit" => match param {
+            "direction" => e("type") == 0,
+            "center" => e("type") == 1,
+            _ => true,
+        },
+        "ec.stylize.halftone" => match param {
+            "inkColor" | "paperColor" => e("colorMode") == 0,
+            _ => true,
+        },
+        "ec.stylize.crt" => param != "maskStrength" || e("maskType") != 2,
+        "ec.stylize.ascii" => match param {
+            "textColor" => e("colorMode") == 1,
+            "backgroundColor" => e("backgroundMode") == 0,
+            _ => true,
+        },
         "ec.sim.carddance" | "ec.transition.cardwipe" => crate::card3d::shown(param, &e).unwrap_or(true),
         "ec.sim.shatter" => match param {
             "shape/customShatterMap" | "shape/whiteTilesFixed" => e("shape/pattern") == 5,
@@ -263,6 +279,12 @@ mod tests {
         assert!(shown("ec.color.selectivecolor", "details/reds", &[]));
         assert!(!shown("ec.color.selectivecolor", "details/blues/bluesCyan", &[]));
         assert!(shown("ec.color.selectivecolor", "details", &[]));
+        // EffectCraft's own effects.
+        assert!(shown("ec.stylize.rgbsplit", "direction", &[]) && !shown("ec.stylize.rgbsplit", "center", &[]));
+        assert!(shown("ec.stylize.rgbsplit", "center", &[("type", 1)]) && !shown("ec.stylize.rgbsplit", "direction", &[("type", 1)]));
+        assert!(!shown("ec.stylize.halftone", "inkColor", &[("colorMode", 1)]));
+        assert!(shown("ec.stylize.crt", "maskStrength", &[]) && !shown("ec.stylize.crt", "maskStrength", &[("maskType", 2)]));
+        assert!(!shown("ec.stylize.ascii", "textColor", &[]) && shown("ec.stylize.ascii", "textColor", &[("colorMode", 1)]));
         // Everything else is always shown.
         assert!(shown("ec.blur.gaussian", "blurriness", &[]));
     }

@@ -59,6 +59,7 @@ mod sim3;
 mod stylize2;
 mod stylize3;
 mod stylize4;
+mod stylize5;
 mod textfx;
 mod time_fx;
 mod transition;
@@ -656,6 +657,7 @@ pub fn registry() -> &'static [EffectSpec] {
         v.extend(textfx::specs());
         v.extend(stylize3::specs());
         v.extend(stylize4::specs());
+        v.extend(stylize5::specs());
         v.extend(transition2::specs());
         v.extend(channel2::specs());
         v.extend(keying2::specs());
@@ -1324,6 +1326,7 @@ pub const TIME_DEPENDENT: &[&str] = &[
     "ec.distort.ripple",
     "ec.generate.radiowaves",
     "ec.stylize.scatter",
+    "ec.stylize.vhs",
     "ec.stylize.strobe",
     "ec.noise.noise",
     "ec.noise.addgrain",

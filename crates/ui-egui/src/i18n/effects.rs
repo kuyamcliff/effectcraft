@@ -27,8 +27,9 @@
 //! The Simplified Chinese names come from the installed After Effects 2026 (26.5.0.89)
 //! Simplified Chinese interface, its 21 category folder names included; `Cryptomatte`,
 //! `EXtractoR`, `IDentifier`, `Key Light` and `Unmult` stay in English as brand names, and
-//! `Face Measurements` / `Face Track Points` and the Stylize effects `RGB Split`, `Halftone`,
-//! `Pixel Sort` and `Dither` are EffectCraft's own effects, so their wording is ours.
+//! `Face Measurements` / `Face Track Points`, the Stylize effects `RGB Split`, `Halftone`,
+//! `Pixel Sort`, `Dither`, `VHS`, `CRT` and `ASCII Art`, and `Light Leak` are EffectCraft's own
+//! effects, so their wording is ours.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -406,6 +407,10 @@ const SIMPLIFIED_CHINESE: &[Row] = &[
     ("ec.stylize.halftone", "Halftone", "半色调"),
     ("ec.stylize.pixelsort", "Pixel Sort", "像素排序"),
     ("ec.stylize.dither", "Dither", "抖动"),
+    ("ec.stylize.vhs", "VHS", "VHS 录像带"),
+    ("ec.stylize.crt", "CRT", "CRT 显像管"),
+    ("ec.stylize.ascii", "ASCII Art", "ASCII 字符画"),
+    ("ec.generate.lightleak", "Light Leak", "漏光"),
     ("ec.text.numbers", "Numbers", "编号"),
     ("ec.text.timecode", "Timecode", "时间码"),
     ("ec.time.ccforcemotionblur", "CC Force Motion Blur", "CC 强制运动模糊"),
