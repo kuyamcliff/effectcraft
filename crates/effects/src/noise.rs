@@ -355,6 +355,9 @@ pub(crate) fn median_image(img: &Image, r: usize) -> Image {
     if r == 0 || w == 0 || h == 0 {
         return img.clone();
     }
+    // Past the layer's larger side every window already covers all of it (the rest is repeated
+    // edges); a radius of 10⁹ walked 10⁹ rows a column and overflowed the window size.
+    let r = r.min(w.max(h));
     let q: Vec<[u16; 4]> = img.data.par_iter().map(|p| [quant(p[0]), quant(p[1]), quant(p[2]), quant(p[3])]).collect();
     let n = (2 * r + 1) * (2 * r + 1);
     let half = n / 2;

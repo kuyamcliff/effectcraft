@@ -322,11 +322,17 @@ pub fn levels_channels_identity(ctx: &EffectCtx) -> bool {
     levels_channel_settings(ctx).iter().all(|l| l.0 == LEVELS_IDENTITY)
 }
 
+/// The most stops Exposure (and Lumetri's Exposure) brightens or darkens by: far past any
+/// slider, and 2^40 times a pixel stays finite.
+pub const MAX_EXPOSURE_STOPS: f32 = 40.0;
+
 /// Exposure's per-channel (gain, offset, gamma) for R, G, B: the Master group's values, or the
 /// Red / Green / Blue groups' with Channels = Individual Channels.
 pub fn exposure_settings(ctx: &EffectCtx) -> [(f32, f32, f32); 3] {
     let f = |k: &str| ctx.params.f(k) as f32;
-    let one = |e: &str, o: &str, g: &str| (2f32.powf(f(e)), f(o), f(g).max(0.01));
+    // Exposure in stops, within ±MAX_EXPOSURE_STOPS: 2^10⁹ is infinite and every pixel became
+    // infinite with it.
+    let one = |e: &str, o: &str, g: &str| (2f32.powf(f(e).clamp(-MAX_EXPOSURE_STOPS, MAX_EXPOSURE_STOPS)), f(o), f(g).max(0.01));
     if ctx.params.e("channels") == 1 {
         [
             one("red/redExposure", "red/redOffset", "red/redGamma"),

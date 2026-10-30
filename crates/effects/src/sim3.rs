@@ -622,7 +622,11 @@ fn pg_of(ctx: &EffectCtx) -> Pg {
         dir_spread: pr.f("cannon/directionRandomSpread") as f32,
         vel: pr.f("cannon/velocity") as f32,
         vel_spread: pr.f("cannon/velocityRandomSpread") as f32,
-        color: pr.color("cannon/cannonColor"),
+        // Straight colour; an alpha past 1 made the particles' compositing diverge.
+        color: {
+            let c = pr.color("cannon/cannonColor").map(|c| if c.is_finite() { c.clamp(0.0, 64.0) } else { 0.0 });
+            [c[0], c[1], c[2], c[3].min(1.0)]
+        },
         radius: pr.f("cannon/cannonParticleRadius").max(0.0) as f32,
         cannon_text: pr.s("options/cannonText").chars().collect(),
         pex_radius: pr.f("particleExploder/radiusOfNewParticles").max(0.0) as f32,

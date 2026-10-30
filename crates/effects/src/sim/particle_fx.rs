@@ -212,7 +212,8 @@ pub(super) fn particle_world_plan(ctx: &EffectCtx, b: &Buf) -> Option<SpritePlan
     let death = pr.color("particle/deathColor");
     let (bs, ds) = (pr.f("particle/birthSize") as f32, pr.f("particle/deathSize") as f32);
     let svar = pr.f("particle/sizeVariation") as f32 / 100.0;
-    let max_op = pr.f("particle/maxOpacity") as f32 / 100.0;
+    // An opacity over 100 % made the particles' "over" compositing diverge to infinity.
+    let max_op = (pr.f("particle/maxOpacity") as f32 / 100.0).clamp(0.0, 1.0);
     let s = b.scale as f32;
     let cam = PwCamera::new(ctx, b);
     let mut list: Vec<(f32, Sprite)> = st
@@ -287,7 +288,8 @@ pub(super) fn particle_systems2_plan(ctx: &EffectCtx, b: &Buf) -> SpritePlan {
     let death = pr.color("particle/deathColor");
     let (bs, ds) = (pr.f("particle/birthSize") as f32, pr.f("particle/deathSize") as f32);
     let svar = pr.f("particle/sizeVariation") as f32 / 100.0;
-    let max_op = pr.f("particle/maxOpacity") as f32 / 100.0;
+    // An opacity over 100 % made the particles' "over" compositing diverge to infinity.
+    let max_op = (pr.f("particle/maxOpacity") as f32 / 100.0).clamp(0.0, 1.0);
     let s = b.scale as f32;
     let sprites: Vec<Sprite> = st
         .parts

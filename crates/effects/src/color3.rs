@@ -444,7 +444,7 @@ fn lumetri(ctx: &EffectCtx, mut b: Buf) -> Buf {
     let look_lut = if look == 1 { crate::utility::load_lut(pr.s("creative/lookFile")) } else { None };
     let temp = (pr.f("basicCorrection/whiteBalance/temperature") / 100.0) as f32;
     let tint = (pr.f("basicCorrection/whiteBalance/tint") / 100.0) as f32;
-    let expo = 2f32.powf(pr.f("basicCorrection/tone/exposure") as f32);
+    let expo = 2f32.powf((pr.f("basicCorrection/tone/exposure") as f32).clamp(-crate::color_fx::MAX_EXPOSURE_STOPS, crate::color_fx::MAX_EXPOSURE_STOPS));
     let contrast = (pr.f("basicCorrection/tone/contrast") / 100.0) as f32;
     let (hi, sh, wh, bl) = (
         (pr.f("basicCorrection/tone/highlights") / 100.0) as f32,

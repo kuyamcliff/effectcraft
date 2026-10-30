@@ -23,10 +23,19 @@ fn plum(p: Px) -> f32 {
 // ---------------------------------------------------------------------------------------------
 // Bilateral / Smart Blur
 
+/// The largest radius Bilateral and Smart Blur sample (px).
+const MAX_EDGE_RADIUS: f64 = 4096.0;
+
 /// Edge-preserving neighbourhood average. `hard` = box spatial kernel + hard luminance range test
 /// (Smart Blur); otherwise Gaussian spatial × Gaussian range weights (bilateral filter, Tomasi &
 /// Manduchi 1998). Large radii are sampled on a stride to stay fast.
 fn edge_preserving(src: &Image, r: f64, range: f32, hard: bool) -> Image {
+    // An unbounded radius made the sampling loop's step overflow, and the effect never finished
+    // (the app hung). Past a few thousand pixels the strided samples clamp to the layer's edge.
+    if !r.is_finite() {
+        return src.clone();
+    }
+    let r = r.clamp(0.0, MAX_EDGE_RADIUS);
     let ri = r.ceil() as i64;
     let stride = ((r / 6.0).ceil() as i64).max(1);
     let sig_s2 = 2.0 * (r / 2.0).max(0.5).powi(2);
@@ -295,6 +304,14 @@ pub fn camera_lens_spans(ctx: &EffectCtx, r: f64) -> (Vec<(i64, i64, i64)>, f64)
     (spans, r * aspect.max(1.0))
 }
 
+/// Camera Lens Blur's Blur Radius (layer px) within its valid range: the iris has a row per
+/// pixel of radius, and a radius of 10⁹ (from an expression) built two billion of them. Shared
+/// with the GPU path.
+pub fn camera_lens_radius(ctx: &EffectCtx) -> f64 {
+    let r = ctx.params.f("blurRadius");
+    if r.is_finite() { r.clamp(0.0, 500.0) } else { 0.0 }
+}
+
 /// Whether Camera Lens Blur needs more than plain iris spans (Diffraction Fringe or a Blur
 /// Map): the GPU kernel handles the plain blur only.
 pub fn camera_lens_plain(ctx: &EffectCtx) -> bool {
@@ -302,7 +319,7 @@ pub fn camera_lens_plain(ctx: &EffectCtx) -> bool {
 }
 
 fn camera_lens_blur(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let r = ctx.params.f("blurRadius").max(0.0) * b.scale;
+    let r = camera_lens_radius(ctx) * b.scale;
     if r < 0.5 {
         return b;
     }
@@ -627,14 +644,22 @@ fn reduce_flicker(ctx: &EffectCtx, mut b: Buf) -> Buf {
     b
 }
 
+/// The largest radius CC Cross Blur blurs by (px); past the layer's size a wider box only
+/// dims it further.
+const MAX_CROSS_RADIUS: f64 = 4096.0;
+
 fn cross_blur(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let rx = (ctx.params.f("radiusX").max(0.0) * b.scale).round() as usize;
-    let ry = (ctx.params.f("radiusY").max(0.0) * b.scale).round() as usize;
+    // NaN or infinite radii (from expressions) made the growth `radius × 3` overflow.
+    let radius = |id: &str| {
+        let r = ctx.params.f(id) * b.scale;
+        if r.is_finite() { r.clamp(0.0, MAX_CROSS_RADIUS).round() as usize } else { 0 }
+    };
+    let (rx, ry) = (radius("radiusX"), radius("radiusY"));
     if rx == 0 && ry == 0 {
         return b;
     }
     if !ctx.adjustment {
-        b.pad((rx.max(ry) * 3) as u32 + 1);
+        b.pad(rx.max(ry).saturating_mul(3).saturating_add(1).min(u32::MAX as usize) as u32);
     }
     let repeat = ctx.adjustment;
     let hz = effectcraft_raster::box_blur(&b.img, rx, 0, 3, repeat);
@@ -812,6 +837,30 @@ mod tests {
         let jump_g = g.get(16, 8)[0] - g.get(15, 8)[0];
         assert!(jump_b > 0.7, "{jump_b}");
         assert!(jump_b > jump_g + 0.3);
+    }
+
+    /// CC Cross Blur with a NaN, infinite or huge radius (from an expression) overflowed or never
+    /// finished; it now treats NaN / infinity as no blur and caps the radius.
+    #[test]
+    fn cross_blur_finishes_at_any_radius() {
+        let img = edge_img();
+        for v in [f64::NAN, f64::INFINITY] {
+            assert_eq!(run("ec.blur.cccross", &img, &[("radiusX", num(v)), ("radiusY", num(v))]).img, img);
+        }
+        let huge = run("ec.blur.cccross", &img, &[("radiusX", num(1e12)), ("radiusY", num(10.0))]);
+        assert!(huge.img.data.iter().all(|p| p.iter().all(|c| c.is_finite())));
+    }
+
+    /// An infinite Radius (from an expression) made the sampling step overflow and Bilateral
+    /// and Smart Blur never finished; a huge one is capped.
+    #[test]
+    fn edge_preserving_blurs_finish_at_any_radius() {
+        let img = edge_img();
+        for id in ["ec.blur.bilateral", "ec.blur.smart"] {
+            assert_eq!(run(id, &img, &[("radius", num(f64::INFINITY))]).img, img, "{id}");
+            let huge = run(id, &img, &[("radius", num(1e12))]).img;
+            assert!(huge.data.iter().all(|p| p.iter().all(|c| c.is_finite())), "{id}");
+        }
     }
 
     #[test]

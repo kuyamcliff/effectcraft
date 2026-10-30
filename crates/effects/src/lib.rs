@@ -58,6 +58,8 @@ mod sim2;
 mod sim3;
 mod stylize2;
 mod stylize3;
+#[cfg(test)]
+mod sweep;
 mod textfx;
 mod time_fx;
 mod transition;
@@ -95,7 +97,7 @@ pub use sim::particle_state;
 pub use sim3::{PgBlit, PgPlan, playground_plan, playground_state};
 pub use stylize2::strobe_on;
 // CPU helpers the GPU kernels share (effectcraft-gpu).
-pub use blur2::{camera_lens_plain, camera_lens_spans, radial_fast_pad};
+pub use blur2::{camera_lens_plain, camera_lens_radius, camera_lens_spans, radial_fast_pad};
 pub use generate::{four_color_softening, gen_mode};
 pub use generate2::pattern_kind as cell_pattern_kind;
 pub use generate2::{BoltSeg, Contour, Ghost, RadioPlan, Wave, flare_ghosts, lightning_segments, radio_plan};

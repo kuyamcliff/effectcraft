@@ -83,8 +83,10 @@ fn box_blur(ctx: &EffectCtx, mut b: Buf) -> Buf {
 }
 
 fn directional(ctx: &EffectCtx, mut b: Buf) -> Buf {
-    let len = ctx.params.f("length") * b.scale;
-    if len < 0.5 {
+    // Blur Length within its valid range (1000 px): a length of 10⁹ (from an expression) padded
+    // the layer to the whole budget for samples that all fell outside it.
+    let len = ctx.params.f("length").min(1000.0) * b.scale;
+    if len.is_nan() || len < 0.5 {
         return b;
     }
     if !ctx.adjustment {

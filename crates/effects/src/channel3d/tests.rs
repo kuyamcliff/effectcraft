@@ -360,6 +360,17 @@ fn extractor_maps_named_channels() {
     assert_eq!(s.img.get(0, 0), [1.0, 0.3, 0.4, 1.0]);
 }
 
+/// A NaN or infinite Black / White Point (from an expression) made every pixel NaN; such a
+/// point now counts as its default.
+#[test]
+fn extractor_ignores_non_finite_points() {
+    let img = Image::filled(2, 2, [0.2, 0.3, 0.4, 1.0]);
+    for (id, v) in [("blackPoint", f64::NAN), ("blackPoint", f64::INFINITY), ("whitePoint", f64::NAN), ("whitePoint", f64::NEG_INFINITY)] {
+        let o = run_fx("ec.3d.extractor", &[("red", Value::Str("G".into())), (id, num(v))], img.clone(), 0.0, EffectEnv::default());
+        assert_eq!(o.img.get(0, 0), [0.3, 0.3, 0.4, 1.0], "{id} = {v}");
+    }
+}
+
 #[test]
 fn channel_extract_antialias_averages_sub_pixels() {
     // Depth at twice the layer resolution, alternating 0 / 1000 per aux column.

@@ -433,7 +433,8 @@ fn smoothie(ctx: &EffectCtx, mut b: Buf) -> Buf {
         })
         .collect();
     let phase = (ctx.params.f("phase") / 360.0) as f32;
-    let loops = (ctx.params.e("colorLoop") + 1) as f32;
+    // 1x–4x; an index past the popup (from a script) overflowed `+ 1`.
+    let loops = (ctx.params.e("colorLoop").min(3) + 1) as f32;
     b.img.data.par_iter_mut().zip(pl.data.par_iter()).for_each(|(px, &v)| {
         if px[3] <= 0.0 {
             return;

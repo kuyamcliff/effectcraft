@@ -252,7 +252,8 @@ pub fn foam_full_plan(ctx: &EffectCtx, b: &Buf) -> FoamPlan {
                     let (gx, gy) = ((q.p[0] / cs).floor() as i32, (q.p[1] / cs).floor() as i32);
                     for dy in -1..=1 {
                         for dx in -1..=1 {
-                            let Some(list) = grid.get(&(gx + dx, gy + dy)) else { continue };
+                            // Wrapping: a bubble far off-layer saturates its cell at i32::MAX.
+                            let Some(list) = grid.get(&(gx.wrapping_add(dx), gy.wrapping_add(dy))) else { continue };
                             for &j in list {
                                 if j <= i {
                                     continue;

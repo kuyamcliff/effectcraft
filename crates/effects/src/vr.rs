@@ -467,8 +467,10 @@ pub fn sphere_blur(img: &Image, sigma: f64) -> Image {
         });
         std::mem::swap(&mut cur, &mut tmp);
     }
+    // Past twice the height a column window already wraps the whole sphere (a radius of 10⁹
+    // walked that many rows).
     for &r in &radii {
-        cur = box_cols_pole(&cur, r);
+        cur = box_cols_pole(&cur, r.min(2 * h));
     }
     cur
 }
@@ -769,7 +771,8 @@ fn composite(orig: &Image, layer: &Image, mode: u32, opacity: f32) -> Image {
 
 fn vr_gradients(ctx: &EffectCtx, mut b: Buf) -> Buf {
     let pr = ctx.params;
-    let blend = pr.f("blend").max(0.1);
+    // Gradient Power within its range: a power of 10⁹ made every weight infinite or zero (NaN).
+    let blend = if pr.f("blend").is_finite() { pr.f("blend").clamp(0.1, 10.0) } else { 2.0 };
     let opacity = (pr.f("opacity") / 100.0) as f32;
     let mode = pr.e("blendingMode");
     let (lw, lh) = (ctx.layer_size[0].max(1.0), ctx.layer_size[1].max(1.0));

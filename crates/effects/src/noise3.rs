@@ -158,7 +158,8 @@ pub fn typed_noise(x: f32, y: f32, z: f32, seed: u32, noise_type: u32) -> f32 {
     let (ix, iy, iz) = (x0 as i32, y0 as i32, z0 as i32);
     let l = |a: f32, b: f32, t: f32| a + (b - a) * t;
     let slice = |dz: i32| -> f32 {
-        let c = |dx: i32, dy: i32| lattice(ix + dx, iy + dy, iz + dz, seed);
+        // Wrapping: a coordinate past i32 saturates there, and the next cell overflowed.
+        let c = |dx: i32, dy: i32| lattice(ix.wrapping_add(dx), iy.wrapping_add(dy), iz.wrapping_add(dz), seed);
         match noise_type {
             0 => c(0, 0),
             1 => l(l(c(0, 0), c(1, 0), tx), l(c(0, 1), c(1, 1), tx), ty),

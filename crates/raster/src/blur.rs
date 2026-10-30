@@ -9,6 +9,25 @@ use rayon::prelude::*;
 
 use crate::{Image, Px};
 
+/// The largest box radius a pass uses: a window this wide already spans any image, so a larger
+/// radius only changes how much the edges weigh. Keeps `2r + 1` and `r as isize` from
+/// overflowing (an infinite Fast Box / CC Cross Blur radius panicked or never finished).
+const MAX_BOX_RADIUS: usize = 1 << 30;
+
+/// The largest sigma [`box_radii`] takes: its box widths are squared in `i64`.
+const MAX_BOX_SIGMA: f64 = (1u64 << 28) as f64;
+
+/// Window `lo..=hi` over `len` samples, split into how many indices lie before 0, the indices
+/// inside `0..len`, and how many lie at or after `len`. Summing a window this way costs its
+/// part inside the image, not its radius (a radius of 10⁹ took 10⁹ steps a row).
+fn split_window(lo: isize, hi: isize, len: usize) -> (usize, std::ops::Range<usize>, usize) {
+    let len_i = len as isize;
+    let before = (0isize.min(hi + 1) - lo).max(0) as usize;
+    let (a, b) = (lo.clamp(0, len_i), (hi + 1).clamp(0, len_i));
+    let after = (hi + 1 - lo.max(len_i)).max(0) as usize;
+    (before, a as usize..b.max(a) as usize, after)
+}
+
 /// One horizontal box pass of radius `r` (window 2r+1) over each row of `src` (width `w`) into
 /// `out`; `repeat` = edge pixels extend, otherwise transparent.
 fn box_h_into(src: &[Px], out: &mut [Px], w: usize, r: usize, repeat: bool) {
@@ -16,7 +35,8 @@ fn box_h_into(src: &[Px], out: &mut [Px], w: usize, r: usize, repeat: bool) {
         out.copy_from_slice(src);
         return;
     }
-    let norm = 1.0 / (2 * r + 1) as f32;
+    let r = r.min(MAX_BOX_RADIUS);
+    let norm = 1.0 / (2.0 * r as f32 + 1.0);
     out.par_chunks_mut(w).zip(src.par_chunks(w)).for_each(|(o, row)| {
         let get = |i: isize| -> Px {
             if i < 0 {
@@ -28,8 +48,14 @@ fn box_h_into(src: &[Px], out: &mut [Px], w: usize, r: usize, repeat: bool) {
             }
         };
         let mut acc = [0.0f32; 4];
-        for i in -(r as isize)..=(r as isize) {
+        let (before, inside, after) = split_window(-(r as isize), r as isize, w);
+        for (i, n) in [(-1isize, before), (w as isize, after)] {
             let p = get(i);
+            for c in 0..4 {
+                acc[c] += p[c] * n as f32;
+            }
+        }
+        for p in row.get(inside).unwrap_or_default() {
             for c in 0..4 {
                 acc[c] += p[c];
             }
@@ -51,8 +77,9 @@ fn box_v_into(src: &[Px], out: &mut [Px], w: usize, h: usize, r: usize, repeat: 
         out.copy_from_slice(src);
         return;
     }
-    let norm = 1.0 / (2 * r + 1) as f32;
-    let block = (4 * r).clamp(32, 256);
+    let r = r.min(MAX_BOX_RADIUS);
+    let norm = 1.0 / (2.0 * r as f32 + 1.0);
+    let block = r.saturating_mul(4).clamp(32, 256);
     let row = |i: isize| -> Option<&[Px]> {
         if i < 0 {
             repeat.then(|| &src[0..w])
@@ -65,11 +92,13 @@ fn box_v_into(src: &[Px], out: &mut [Px], w: usize, h: usize, r: usize, repeat: 
     out.par_chunks_mut(w * block).enumerate().for_each(|(bi, chunk)| {
         let ya = (bi * block) as isize;
         let mut acc = vec![[0.0f32; 4]; w];
-        for i in ya - r as isize..=ya + r as isize {
-            if let Some(rw) = row(i) {
+        let (before, inside, after) = split_window(ya - r as isize, ya + r as isize, h);
+        let rows = [(-1isize, before as f32)].into_iter().chain(inside.map(|i| (i as isize, 1.0))).chain([(h as isize, after as f32)]);
+        for (i, n) in rows {
+            if let Some(rw) = row(i).filter(|_| n > 0.0) {
                 for (a, p) in acc.iter_mut().zip(rw) {
                     for c in 0..4 {
-                        a[c] += p[c];
+                        a[c] += p[c] * n;
                     }
                 }
             }
@@ -130,9 +159,11 @@ fn box_passes(img: &Image, rx: &[usize], ry: &[usize], repeat: bool) -> Image {
 
 /// Box radii for `n` passes approximating a Gaussian of `sigma` (Kovesi / "boxes for Gauss").
 fn box_radii(sigma: f64, n: usize) -> Vec<usize> {
-    if sigma <= 0.0 {
+    // Not finite or not positive: no blur. Huge: capped (the squared widths overflowed).
+    if !sigma.is_finite() || sigma <= 0.0 {
         return vec![0; n];
     }
+    let sigma = sigma.min(MAX_BOX_SIGMA);
     let w_ideal = (12.0 * sigma * sigma / n as f64 + 1.0).sqrt();
     let mut wl = w_ideal.floor() as i64;
     if wl % 2 == 0 {
@@ -171,6 +202,12 @@ fn gauss_pass(img: &Image, sigma: f64, vertical: bool, repeat: bool) -> Image {
     // Below 1e-3 the kernel is the identity in f64; tiny sigmas would also make 2σ² underflow to 0 (NaN taps).
     if sigma.is_nan() || sigma <= 1e-3 || img.is_empty() {
         return img.clone();
+    }
+    // A kernel 6σ long: past this the box approximation costs the same at any size (a sigma of
+    // 10⁹ asked for gigabytes of taps).
+    if sigma > 1024.0 {
+        let r = box_radii(sigma, 3);
+        return if vertical { box_passes(img, &[], &r, repeat) } else { box_passes(img, &r, &[], repeat) };
     }
     let r = (sigma * 3.0).ceil() as i64;
     let mut k: Vec<f64> = (-r..=r).map(|i| (-((i * i) as f64) / (2.0 * sigma * sigma)).exp()).collect();
@@ -262,6 +299,54 @@ pub fn radial_blur(img: &Image, center: (f64, f64), amount: f64, zoom: bool) -> 
 
 #[cfg(test)]
 mod tests {
+
+    /// Box sums by the direct window loop, for checking the split-window sums.
+    fn box_naive(img: &Image, r: usize, vertical: bool, repeat: bool) -> Image {
+        let mut out = Image::new(img.width, img.height);
+        let (w, h) = (img.width as i64, img.height as i64);
+        for y in 0..h {
+            for x in 0..w {
+                let mut acc = [0.0f32; 4];
+                for d in -(r as i64)..=(r as i64) {
+                    let (sx, sy) = if vertical { (x, y + d) } else { (x + d, y) };
+                    let p = if repeat { img.get_clamped(sx, sy) } else { img.get(sx, sy) };
+                    for c in 0..4 {
+                        acc[c] += p[c];
+                    }
+                }
+                out.set(x as u32, y as u32, acc.map(|v| v / (2 * r + 1) as f32));
+            }
+        }
+        out
+    }
+
+    /// The window sums start from the part of the window inside the image (the radius used to
+    /// cost that many steps a row): same results as the direct sum, and a huge radius finishes.
+    #[test]
+    fn box_window_sums_cost_the_image_not_the_radius() {
+        let mut img = Image::new(13, 9);
+        for y in 0..9 {
+            for x in 0..13 {
+                img.set(x, y, [((x * 7 + y * 3) % 11) as f32 / 11.0, y as f32 / 9.0, 0.5, 1.0]);
+            }
+        }
+        for r in [1usize, 2, 6, 12, 13, 40] {
+            for repeat in [false, true] {
+                let (hz, vt) = (box_blur(&img, r, 0, 1, repeat), box_blur(&img, 0, r, 1, repeat));
+                let (nh, nv) = (box_naive(&img, r, false, repeat), box_naive(&img, r, true, repeat));
+                for (a, b) in hz.data.iter().zip(&nh.data).chain(vt.data.iter().zip(&nv.data)) {
+                    for c in 0..4 {
+                        assert!((a[c] - b[c]).abs() < 1e-5, "r {r} repeat {repeat}: {a:?} vs {b:?}");
+                    }
+                }
+            }
+        }
+        // A radius of 10⁹ took 10⁹ steps a row (the test runner's timeout catches a regression).
+        for r in [1_000_000_000usize, usize::MAX] {
+            let out = box_blur(&img, r, r, 3, true);
+            assert!(out.data.iter().all(|p| p.iter().all(|c| c.is_finite())));
+        }
+    }
     use super::*;
 
     #[test]

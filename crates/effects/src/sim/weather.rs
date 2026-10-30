@@ -33,7 +33,8 @@ pub(super) fn rainfall_plan(ctx: &EffectCtx, b: &Buf) -> SpritePlan {
     let wvar = pr.f("windVariation") as f32 / 100.0;
     let spread = pr.f("spread") as f32;
     let color = pr.color("color");
-    let opacity = pr.f("opacity") as f32 / 100.0;
+    // An opacity over 100 % made the drops' "over" compositing diverge to infinity.
+    let opacity = (pr.f("opacity") as f32 / 100.0).clamp(0.0, 1.0);
     let mode = pr.e("transferMode");
     let with_orig = pr.b("compositeWithOriginal");
     let refract = pr.e("extras/appearance") == 0;
@@ -90,7 +91,8 @@ pub(super) fn snowfall_plan(ctx: &EffectCtx, b: &Buf) -> SpritePlan {
     let wfreq = pr.f("wiggle/wiggleFrequency") as f32;
     let wfvar = pr.f("wiggle/wiggleFrequencyVariation") as f32 / 100.0;
     let color = pr.color("color");
-    let opacity = pr.f("opacity") as f32 / 100.0;
+    // An opacity over 100 % made the drops' "over" compositing diverge to infinity.
+    let opacity = (pr.f("opacity") as f32 / 100.0).clamp(0.0, 1.0);
     let mode = pr.e("transferMode");
     let with_orig = pr.b("compositeWithOriginal");
     let off = pr.v2("extras/offset");

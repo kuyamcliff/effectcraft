@@ -98,9 +98,16 @@ fn channel_extract(ctx: &EffectCtx, mut b: Buf) -> Buf {
     b
 }
 
+/// Black Point and White Point, each its default (0, 1) when not finite: a NaN or infinite
+/// point (from an expression) made every pixel NaN.
+fn black_white(ctx: &EffectCtx) -> (f32, f32) {
+    let f = |id: &str, d: f32| Some(ctx.params.f(id) as f32).filter(|v| v.is_finite()).unwrap_or(d);
+    (f("blackPoint", 0.0), f("whitePoint", 1.0))
+}
+
 /// 3D Channel Extract through one index map (None when the channel is missing).
 fn channel_extract_at(ctx: &EffectCtx, b: &Buf, a: &AuxChannels, idx: &[Option<usize>]) -> Option<Image> {
-    let (bp, wp) = (ctx.params.f("blackPoint") as f32, ctx.params.f("whitePoint") as f32);
+    let (bp, wp) = black_white(ctx);
     // Clamp Output limits the mapped values to 0..1; Invert Depth Map flips them.
     let (clamp, invert) = (ctx.params.b("clampOutput"), ctx.params.b("invertDepthMap"));
     let cl = move |v: f32| if clamp { v.clamp(0.0, 1.0) } else { v };
@@ -535,7 +542,7 @@ fn cryptomatte(ctx: &EffectCtx, mut b: Buf) -> Buf {
 fn extractor(ctx: &EffectCtx, mut b: Buf) -> Buf {
     let a = aux(ctx);
     let names = [ctx.params.s("red"), ctx.params.s("green"), ctx.params.s("blue"), ctx.params.s("alpha")];
-    let (bp, wp) = (ctx.params.f("blackPoint") as f32, ctx.params.f("whitePoint") as f32);
+    let (bp, wp) = black_white(ctx);
     let unmult = ctx.params.b("unMult");
     let clip = ctx.params.b("clip");
     let idx = a.as_ref().map(|a| index_map(&b, a));

@@ -105,6 +105,13 @@ impl Plane {
     }
 }
 
+/// The largest box radius the plane filters use: far wider than any image, so a larger radius
+/// only shifts weight to the repeated edges.
+const MAX_BOX_RADIUS: usize = 1 << 30;
+
+/// The largest sigma [`box_radii`] takes: its box widths are squared in `i64`.
+const MAX_BOX_SIGMA: f64 = (1u64 << 28) as f64;
+
 /// Box mean of radius `r` along each row (window 2r+1, edge pixels repeated).
 fn box_row(src: &[f32], dst: &mut [f32], r: usize) {
     let n = src.len();
@@ -115,11 +122,15 @@ fn box_row(src: &[f32], dst: &mut [f32], r: usize) {
         dst.copy_from_slice(src);
         return;
     }
+    // Capped so `2r + 1` and `r as isize` can't overflow; summing the first window by its part
+    // inside the row (the edges repeat) costs the row, not the radius (10⁹ steps hung).
+    let r = r.min(MAX_BOX_RADIUS);
     let get = |i: isize| src[i.clamp(0, n as isize - 1) as usize];
-    let norm = 1.0 / (2 * r + 1) as f32;
-    let mut acc = 0.0f64;
-    for i in -(r as isize)..=(r as isize) {
-        acc += get(i) as f64;
+    let norm = (1.0 / (2.0 * r as f64 + 1.0)) as f32;
+    let inside = r.min(n - 1);
+    let mut acc = (src[0] as f64) * r as f64 + src[n - 1] as f64 * (r - inside) as f64;
+    for v in &src[..=inside] {
+        acc += *v as f64;
     }
     for x in 0..n {
         dst[x] = acc as f32 * norm;
@@ -138,9 +149,11 @@ pub fn box_plane(p: &Plane, rx: usize, ry: usize) -> Plane {
 
 /// Box radii for `n` passes approximating a Gaussian of `sigma`.
 pub fn box_radii(sigma: f64, n: usize) -> Vec<usize> {
-    if sigma <= 0.0 {
+    // Not finite or not positive: no blur. Huge: capped (the squared widths overflowed).
+    if !sigma.is_finite() || sigma <= 0.0 {
         return vec![0; n];
     }
+    let sigma = sigma.min(MAX_BOX_SIGMA);
     let w_ideal = (12.0 * sigma * sigma / n as f64 + 1.0).sqrt();
     let mut wl = w_ideal.floor() as i64;
     if wl % 2 == 0 {
@@ -181,6 +194,9 @@ pub fn minmax_row(src: &[f32], dst: &mut [f32], r: usize, max: bool) {
         dst.copy_from_slice(src);
         return;
     }
+    // With the edges repeated, a window as wide as the row already covers all of it from any
+    // pixel, so a larger radius gives the same result (and `n + 2r` overflowed at r = 10⁹).
+    let r = r.min(n);
     let k = 2 * r + 1;
     let len = n + 2 * r;
     let get = |i: usize| src[(i as isize - r as isize).clamp(0, n as isize - 1) as usize];

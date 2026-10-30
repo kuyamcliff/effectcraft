@@ -349,8 +349,9 @@ fn box_blur(e: &mut Enc, ctx: &EffectCtx, mut b: GBuf) -> Option<GBuf> {
 }
 
 fn directional(e: &mut Enc, ctx: &EffectCtx, mut b: GBuf) -> Option<GBuf> {
-    let len = ctx.params.f("length") * b.scale;
-    if len < 0.5 {
+    // As on the CPU: Blur Length within its valid range.
+    let len = ctx.params.f("length").min(1000.0) * b.scale;
+    if len.is_nan() || len < 0.5 {
         return Some(b);
     }
     if !ctx.adjustment {

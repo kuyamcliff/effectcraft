@@ -210,6 +210,9 @@ fn minimax(ctx: &EffectCtx, mut b: Buf) -> Buf {
     if r == 0 {
         return b;
     }
+    // A window wider than the layer (beyond it is empty) gives the same result at any larger
+    // radius; padding the planes by a radius of 10⁹ asked for an impossible allocation.
+    let r = r.min(b.img.width.max(b.img.height).max(4096) as usize);
     let op = ctx.params.e("operation");
     let ch = ctx.params.e("channel");
     let dont_shrink = ctx.params.b("dontShrinkEdges");
