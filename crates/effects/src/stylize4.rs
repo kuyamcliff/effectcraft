@@ -15,10 +15,12 @@ use rayon::prelude::*;
 use crate::util::{lerp4, premul, smoothstep, unpremul};
 use crate::{Buf, EffectCtx, EffectSpec, col, num, p, popup, slider};
 
+/// A CPU-only, 32-bit float Stylize effect.
 fn spec(id: &'static str, name: &'static str, params: Vec<crate::ParamSpec>, render: crate::RenderFn) -> EffectSpec {
     EffectSpec { id, name, category: "Stylize", params, render, gpu: false, float: true }
 }
 
+/// A 0–100 % slider.
 fn pct() -> ParamUi {
     slider(0.0, 100.0, 0.0, 100.0, 1)
 }
@@ -200,11 +202,11 @@ fn sort_line(line: &mut [Px], by: u32, lo: f32, hi: f32, max: usize, reverse: bo
         let inside = |p: &Px| p[3] > 0.0 && (lo..=hi).contains(&sort_key(by, *p));
         let Some(first) = line.get(start..).and_then(|r| r.iter().position(inside)) else { break };
         let a = start + first;
-        let run = line.get(a..).map_or(0, |r| r.iter().take_while(|p| inside(p)).count());
-        let mut b = a.saturating_add(run);
-        if max > 0 {
-            b = b.min(a.saturating_add(max));
-        }
+        // Count no further than the span can reach: counting the whole run for every span made
+        // a long run with a short Maximum Span Length quadratic.
+        let reach = if max > 0 { max } else { usize::MAX };
+        let run = line.get(a..).map_or(0, |r| r.iter().take(reach).take_while(|p| inside(p)).count());
+        let b = a.saturating_add(run);
         if let Some(span) = line.get_mut(a..b) {
             let mut keyed: Vec<(f32, Px)> = span.iter().map(|p| (sort_key(by, *p), *p)).collect();
             keyed.sort_by(|x, y| if reverse { y.0.total_cmp(&x.0) } else { x.0.total_cmp(&y.0) });
@@ -360,6 +362,7 @@ fn dither(ctx: &EffectCtx, mut b: Buf) -> Buf {
     b
 }
 
+/// The batch's effects, for the registry.
 pub fn specs() -> Vec<EffectSpec> {
     vec![
         spec(
@@ -437,6 +440,7 @@ mod tests {
         img
     }
 
+    /// Effect `id` with `vals` over its defaults, at time 0.
     fn run(id: &str, vals: &[(&str, Value)], img: Image) -> Buf {
         run_fx(id, vals, img, 0.0, EffectEnv::default())
     }
@@ -446,6 +450,7 @@ mod tests {
         b.img.get(x + b.offset[0] as i64, y + b.offset[1] as i64)
     }
 
+    /// The same input renders the same pixels, and the defaults change the image.
     #[test]
     fn new_effects_are_deterministic() {
         for id in ["ec.stylize.rgbsplit", "ec.stylize.halftone", "ec.stylize.pixelsort", "ec.stylize.dither"] {
@@ -458,6 +463,7 @@ mod tests {
         assert_eq!(run("ec.stylize.dither", &fs, scene(40, 24)).img, run("ec.stylize.dither", &fs, scene(40, 24)).img);
     }
 
+    /// Linear moves red and blue opposite ways along Direction; Radial along the radius.
     #[test]
     fn rgb_split_moves_red_and_blue_apart() {
         // A white dot: red moves 4 px right (Direction 90°), blue 4 px left, green stays.
@@ -496,6 +502,7 @@ mod tests {
         assert!(out.img.data.iter().all(|p| p.iter().all(|c| c.is_finite())));
     }
 
+    /// Darker areas get more ink, in each dot shape and colour mode.
     #[test]
     fn halftone_dots_follow_the_tone() {
         let ink = |v: f32| {
@@ -523,6 +530,8 @@ mod tests {
         }
     }
 
+    /// Only spans within the thresholds are sorted, ascending or reversed, at most Maximum Span
+    /// Length long; pixels move but never change.
     #[test]
     fn pixel_sort_sorts_spans_within_the_thresholds() {
         // One row: dark, then mid tones out of order, then white.
@@ -553,6 +562,25 @@ mod tests {
         assert_eq!(read(&a), [0.0, 0.3, 0.4, 0.5, 0.6, 1.0]);
     }
 
+    /// A long run sorted in short spans finishes in linear time (each span counted its whole
+    /// remaining run, which was quadratic: minutes for this row).
+    #[test]
+    fn pixel_sort_short_spans_of_a_long_run_are_linear() {
+        let n = 200_000u32;
+        let mut row = Image::new(n, 1);
+        for x in 0..n {
+            let v = 0.3 + 0.4 * ((x * 7919) % 1000) as f32 / 1000.0;
+            row.set(x, 0, [v, v, v, 1.0]);
+        }
+        let start = std::time::Instant::now();
+        let out = run("ec.stylize.pixelsort", &[("maxLength", num(1.0)), ("lowerThreshold", num(0.0)), ("upperThreshold", num(100.0))], row.clone());
+        assert_eq!(out.img, row, "one-pixel spans leave the row as it is");
+        let out = run("ec.stylize.pixelsort", &[("maxLength", num(3.0)), ("lowerThreshold", num(0.0)), ("upperThreshold", num(100.0))], row);
+        assert!(out.img.data.chunks(3).all(|s| s.windows(2).all(|w| w[0][0] <= w[1][0])), "three-pixel spans sorted");
+        assert!(start.elapsed().as_secs_f64() < 5.0, "{:?}", start.elapsed());
+    }
+
+    /// Every method keeps a flat grey's average brightness with two levels.
     #[test]
     fn dither_keeps_the_average_with_two_levels() {
         let grey = Image::filled(32, 32, [0.3, 0.3, 0.3, 1.0]);
