@@ -33,6 +33,9 @@ fn blend_with(orig: Px, fx: Px, k: f32) -> Px {
 /// The most RGB Split moves a channel (px).
 const MAX_SPLIT: f64 = 2000.0;
 
+/// The largest channel weight RGB Split takes (×`amount`; Red/Green/Blue Shift ±200%).
+const MAX_WEIGHT: f64 = 2.0;
+
 /// RGB Split: the red and blue channels move apart along a direction (Linear) or away from a
 /// centre (Radial, growing with the distance from it, like a lens' lateral chromatic
 /// aberration); green stays. The layer grows by the shift.
@@ -41,8 +44,16 @@ fn rgb_split(ctx: &EffectCtx, mut b: Buf) -> Buf {
     if !amount.is_finite() || amount.abs() < 1e-3 {
         return b;
     }
+    // Shift weights (−2–2; a channel moves `amount × weight`).
+    let weight = |id| {
+        let k = ctx.params.f(id) / 100.0;
+        if k.is_finite() { k.clamp(-MAX_WEIGHT, MAX_WEIGHT) } else { 0.0 }
+    };
+    let weights = [weight("red"), weight("green"), weight("blue")];
     if !ctx.adjustment {
-        b.pad(amount.abs().ceil() as u32 + 1);
+        // Grow by the farthest any channel moves, so heavily weighted channels aren't clipped.
+        let far = weights.iter().fold(0.0f64, |m, k| m.max(k.abs()));
+        b.pad((amount.abs() * far).ceil() as u32 + 1);
     }
     let radial = ctx.params.e("type") == 1;
     let ang = ctx.params.f("direction").to_radians();
@@ -52,7 +63,6 @@ fn rgb_split(ctx: &EffectCtx, mut b: Buf) -> Buf {
     let (w, h) = (b.img.width as f64, b.img.height as f64);
     // Radial: the farthest corner moves by the full amount.
     let reach = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)].iter().map(|(x, y)| ((x - cx).powi(2) + (y - cy).powi(2)).sqrt()).fold(1.0f64, f64::max);
-    let weights = [ctx.params.f("red") / 100.0, ctx.params.f("green") / 100.0, ctx.params.f("blue") / 100.0];
     let src = b.img.clone();
     b.img.rows_mut().for_each(|(y, row)| {
         for (x, o) in row.iter_mut().enumerate() {
@@ -471,6 +481,19 @@ mod tests {
         assert!(red_x > 36, "red moves outwards: {red_x}");
         // No shift: the image is unchanged.
         assert_eq!(run("ec.stylize.rgbsplit", &[("amount", num(0.0))], scene(10, 6)).img, scene(10, 6));
+    }
+
+    #[test]
+    fn rgb_split_pads_for_the_heaviest_channel() {
+        // Red Shift 200%: red moves 2 × 4 = 8 px, past a pad sized by Amount alone.
+        let mut dot = Image::new(5, 5);
+        dot.set(4, 2, [1.0; 4]);
+        let out = run("ec.stylize.rgbsplit", &[("amount", num(4.0)), ("red", num(200.0))], dot);
+        assert_eq!(out.offset, [9.0, 9.0], "the layer grows by the largest shift");
+        assert_eq!(at(&out, 12, 2), [1.0, 0.0, 0.0, 1.0], "red isn't clipped at the edge");
+        // NaN weights count as no shift.
+        let out = run("ec.stylize.rgbsplit", &[("amount", num(4.0)), ("red", num(f64::NAN)), ("blue", num(f64::NAN))], scene(10, 6));
+        assert!(out.img.data.iter().all(|p| p.iter().all(|c| c.is_finite())));
     }
 
     #[test]
