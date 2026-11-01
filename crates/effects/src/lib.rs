@@ -315,9 +315,7 @@ impl Buf {
     /// Grow by `px` transparent pixels on the left and right and `py` above and below, within
     /// the same budget as [`Buf::pad`] ([`pad_xy_within_budget`]) and the largest supported side.
     pub fn pad_xy(&mut self, px: u32, py: u32) {
-        let (px, py) = pad_xy_within_budget(self.img.width, self.img.height, px, py);
-        let side = |len: u32, p: u32| p.min(effectcraft_raster::MAX_PADDED_SIDE.saturating_sub(len) / 2);
-        let (px, py) = (side(self.img.width, px), side(self.img.height, py));
+        let (px, py) = pad_xy_plan(self.img.width, self.img.height, px, py);
         self.pad_sides([px, py, px, py]);
     }
     /// Grow by `left` and `top` transparent pixels on those sides only.
@@ -358,6 +356,16 @@ pub fn pad_within_budget(w: u32, h: u32, pad: u32) -> u32 {
     // (w + 2p)(h + 2p) = budget, solved for p.
     let p = (((w - h).powi(2) + 4.0 * budget).sqrt() - (w + h)) / 4.0;
     (p.floor().max(0.0) as u32).min(pad)
+}
+
+/// The padding [`Buf::pad_xy`] (and the GPU's `GBuf::pad_xy`) applies for a requested `px`
+/// sideways and `py` up and down on a `w` × `h` buffer: within [`pad_xy_within_budget`], and
+/// neither side past [`effectcraft_raster::MAX_PADDED_SIDE`]. So whatever an effect asks for,
+/// the padded buffer holds at most max(16 Mpx, 4 × w × h) pixels (16 bytes each).
+pub fn pad_xy_plan(w: u32, h: u32, px: u32, py: u32) -> (u32, u32) {
+    let (px, py) = pad_xy_within_budget(w, h, px, py);
+    let side = |len: u32, p: u32| p.min(effectcraft_raster::MAX_PADDED_SIDE.saturating_sub(len) / 2);
+    (side(w, px), side(h, py))
 }
 
 /// The most pixels a `w` × `h` buffer may be padded to: 16 Mpx or four times its area.
@@ -1441,6 +1449,32 @@ pub(crate) fn run_fx(id: &str, vals: &[(&str, Value)], img: Image, time: f64, en
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Fast Box Blur and Camera Lens Blur at their largest settings grow every frame size up to
+    /// the largest supported side (30 000 px) within the padding budget: at most
+    /// max(16 Mpx, 4 × the frame's area), and neither side past 30 000 px. Computed, not
+    /// allocated (a 30 000 px frame is 14 GB).
+    #[test]
+    fn the_blurs_largest_settings_stay_within_the_padding_budget() {
+        let side = effectcraft_raster::MAX_PADDED_SIDE;
+        let frames = [(1, 1), (64, 64), (1920, 1080), (7680, 4320), (16384, 16384), (side, side), (side, 1), (1, side)];
+        let growth = [
+            ("Fast Box Blur, Radius 3000 × 50 iterations", misc::box_reach(3000, 50), misc::box_reach(3000, 50)),
+            ("Fast Box Blur, Horizontal", misc::box_reach(3000, 50), 0),
+            ("Camera Lens Blur, Radius 500, Aspect Ratio 100", blur2::lens_reach(500.0, 100.0).0, blur2::lens_reach(500.0, 100.0).1),
+            ("Camera Lens Blur, Aspect Ratio 0.01", blur2::lens_reach(500.0, 0.01).0, blur2::lens_reach(500.0, 0.01).1),
+            ("any request", u32::MAX, u32::MAX),
+        ];
+        for (w, h) in frames {
+            let budget = (16_777_216u64).max(4 * u64::from(w) * u64::from(h));
+            for (what, px, py) in growth {
+                let (gx, gy) = pad_xy_plan(w, h, px, py);
+                let (pw, ph) = (u64::from(w) + 2 * u64::from(gx), u64::from(h) + 2 * u64::from(gy));
+                assert!(pw * ph <= budget.max(u64::from(w) * u64::from(h)), "{what} on {w}×{h}: {pw}×{ph}");
+                assert!(pw <= u64::from(side.max(w)) && ph <= u64::from(side.max(h)), "{what} on {w}×{h}: {pw}×{ph}");
+            }
+        }
+    }
 
     /// #2261: a 20 × 20 layer with CC Radial Fast Blur's Center far away grows to at most 16 Mpx;
     /// big layers may still grow to four times their area, and small pads are untouched.

@@ -621,7 +621,33 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Window, fill_windows, memory_shortfall};
+    use super::{DEFAULT_FILL_MEMORY, FILL_BYTES_PER_PIXEL, Window, fill_window, fill_windows, memory_shortfall, window_error};
+
+    /// The fill's working set stays within its memory at every frame size up to the largest
+    /// supported side: a window's frames (at the measured bytes per pixel) fit the budget, and a
+    /// frame too large for a two-frame window is refused with an error that says what to do.
+    /// Computed from the window sizes the fill uses, not allocated.
+    #[test]
+    fn fill_windows_fit_their_memory_at_every_frame_size() {
+        let side = effectcraft_raster::MAX_PADDED_SIDE;
+        let frames = [(64, 36), (1920, 1080), (3840, 2160), (7680, 4320), (side, side)];
+        for memory in [0, 1, 1 << 30, DEFAULT_FILL_MEMORY, 64 << 30] {
+            let budget = if memory > 0 { memory } else { DEFAULT_FILL_MEMORY };
+            for (w, h) in frames {
+                let frame = u64::from(w) * u64::from(h) * FILL_BYTES_PER_PIXEL;
+                match fill_window(w, h, memory) {
+                    Some(n) => {
+                        assert!(n >= 2 && n as u64 * frame <= budget, "{w}×{h} in {budget} B: {n} frames of {frame} B");
+                    }
+                    None => assert!(2 * frame > budget, "{w}×{h} in {budget} B: refused although two frames fit"),
+                }
+            }
+        }
+        // The largest frame doesn't fit the default memory: refused up front.
+        assert_eq!(fill_window(side, side, 0), None);
+        let e = window_error(side, side);
+        assert!(e.contains("30000×30000") && e.contains("smaller layer"), "{e}");
+    }
 
     /// Windows run outward from the reference frame, so its fill reaches the frames before it
     /// too (they used to start at frame 0, and a reference only reached its own window and the

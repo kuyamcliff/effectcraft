@@ -140,7 +140,8 @@ impl Services for WebServices {
     }
     /// Drop a stored file from the table (and so from browser storage); a job worker's go from
     /// the page's storage too. The default asks `std::fs`, which has no files on wasm32, so a
-    /// failed fill's frames stayed in browser storage.
+    /// failed fill's frames stayed in browser storage. A path that isn't stored is a no-op
+    /// (`Ok`), on the page and in a worker. See docs/web.md for when stored files are removed.
     fn remove_file(&self, path: &str) -> std::io::Result<()> {
         STORE.remove_file(path);
         if crate::is_worker() {
